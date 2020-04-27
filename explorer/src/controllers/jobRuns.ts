@@ -19,8 +19,9 @@ const searchParams = (req: Request): SearchParams => {
 
 router.get('/job_runs', async (req: Request, res: Response) => {
   const params = searchParams(req)
-  const runs = await search(params)
-  const runCount = await count(params)
+  const s = await search(params)
+  const runs = s.results
+  const runCount = s.totalRecords
   const json = jobRunsSerializer(runs, runCount)
   return res.send(json)
 })

@@ -1,9 +1,29 @@
 import { getRepository, SelectQueryBuilder } from 'typeorm'
 import { JobRun } from '../entity/JobRun'
 import { PaginationParams } from '../utils/pagination'
+import { logger } from '../logging'
 
 export interface SearchParams extends PaginationParams {
   searchQuery?: string
+}
+
+export class JobRunSearch {
+  public results: JobRun[];
+  public totalRecords: int;
+  private query: SelectQueryBuilder<JobRun>;
+
+  constructor(params: SearchParams) {
+    this.query = pagedSearchBuilder(params)
+        .leftJoinAndSelect('job_run.chainlinkNode', 'chainlink_node')
+        .orderBy('job_run.createdAt', 'DESC')
+  }
+
+  async execute(): Promise<JobRunSearch> {
+    let query = await this.query.getRawAndEntities()
+    this.results = query.entities
+    this.totalRecords = parseInt(query.raw[0]?.totalRecords, 10)
+    return this
+  }
 }
 
 const normalizeSearchToken = (id: string): string => {
@@ -26,6 +46,7 @@ const searchBuilder = (searchQuery?: string): SelectQueryBuilder<JobRun> => {
     let searchTokens = searchQuery.split(/\s+/)
     searchTokens = searchTokens.concat(searchTokens.map(normalizeSearchToken))
     query = query
+      .addSelect('COUNT(1) OVER() AS "totalRecords"')
       .where(`
         ARRAY["job_run"."runId", "job_run"."jobId", "job_run"."requestId", "job_run"."requester", "job_run"."txHash"] && ARRAY[:...searchTokens]::citext[]
       `, { searchTokens })
@@ -53,19 +74,6 @@ const pagedSearchBuilder = (
   return query
 }
 
-export const search = async (params: SearchParams): Promise<JobRun[]> => {
-  return pagedSearchBuilder(params)
-    .leftJoinAndSelect('job_run.chainlinkNode', 'chainlink_node')
-    .orderBy('job_run.createdAt', 'DESC')
-    .getMany()
-}
-
-export const count = async (
-  params: Pick<SearchParams, 'searchQuery'>,
-): Promise<number> => {
-  const result = await searchBuilder(params.searchQuery)
-    .select('COUNT(*)', 'count')
-    .getRawOne()
-
-  return parseInt(result['count'], 10)
+export const search = async (params: SearchParams): Promise<JobRunSearch> => {
+  return new JobRunSearch(params).execute()
 }
