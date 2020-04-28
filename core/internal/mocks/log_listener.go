@@ -14,15 +14,17 @@ type LogListener struct {
 	mock.Mock
 }
 
-// Consumer provides a mock function with given fields:
-func (_m *LogListener) Consumer() models.LogConsumer {
+// ConsumerID provides a mock function with given fields:
+func (_m *LogListener) ConsumerID() *models.ID {
 	ret := _m.Called()
 
-	var r0 models.LogConsumer
-	if rf, ok := ret.Get(0).(func() models.LogConsumer); ok {
+	var r0 *models.ID
+	if rf, ok := ret.Get(0).(func() *models.ID); ok {
 		r0 = rf()
 	} else {
-		r0 = ret.Get(0).(models.LogConsumer)
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*models.ID)
+		}
 	}
 
 	return r0
