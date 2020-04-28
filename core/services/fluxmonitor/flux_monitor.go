@@ -57,6 +57,7 @@ type concreteFluxMonitor struct {
 	chStop         chan struct{}
 	chDone         chan struct{}
 	disabled       bool
+	started        bool
 }
 
 type addEntry struct {
@@ -99,6 +100,7 @@ func (fm *concreteFluxMonitor) Start() error {
 	}
 
 	go fm.serveInternalRequests()
+	fm.started = true
 
 	var wg sync.WaitGroup
 	err := fm.store.Jobs(func(j *models.JobSpec) bool {
@@ -136,7 +138,10 @@ func (fm *concreteFluxMonitor) Stop() {
 
 	fm.logBroadcaster.Stop()
 	close(fm.chStop)
-	<-fm.chDone
+	if fm.started {
+		fm.started = false
+		<-fm.chDone
+	}
 }
 
 // serveInternalRequests handles internal requests for state change via
@@ -162,7 +167,7 @@ func (fm *concreteFluxMonitor) serveInternalRequests() {
 		case jobID := <-fm.chRemove:
 			checkers, ok := jobMap[jobID]
 			if !ok {
-				logger.Errorf("job '%s' is missing from the flux monitor", jobID)
+				logger.Errorf("job '%s' is missing from the flux monitor", jobID.String())
 				return
 			}
 			for _, checker := range checkers {

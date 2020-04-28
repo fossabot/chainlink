@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 
+	"fmt"
 	"github.com/smartcontractkit/chainlink/core/auth"
 	"github.com/smartcontractkit/chainlink/core/store/models"
 	"github.com/smartcontractkit/chainlink/core/store/orm"
@@ -112,6 +113,7 @@ func AuthenticateBySession(store AuthStorer, c *gin.Context) error {
 
 	user, err := store.AuthorizedUserWithSession(sessionID)
 	if err != nil {
+		fmt.Println("err", err)
 		return err
 	}
 	c.Set(SessionUserKey, &user)

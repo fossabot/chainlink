@@ -3,11 +3,14 @@ package web_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/smartcontractkit/chainlink/core/auth"
 	"github.com/smartcontractkit/chainlink/core/internal/cltest"
+	"github.com/smartcontractkit/chainlink/core/internal/mocks"
 	"github.com/smartcontractkit/chainlink/core/store/models"
 	"github.com/smartcontractkit/chainlink/core/store/presenters"
 
@@ -54,6 +57,9 @@ func TestUserController_AccountBalances_NoAccounts(t *testing.T) {
 	t.Parallel()
 
 	app, cleanup := cltest.NewApplication(t, cltest.LenientEthMock)
+	kst := new(mocks.KeyStoreInterface)
+	kst.On("Accounts").Return([]accounts.Account{})
+	app.Store.KeyStore = kst
 	defer cleanup()
 	require.NoError(t, app.Start())
 

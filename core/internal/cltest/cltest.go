@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"math/big"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -31,6 +32,8 @@ import (
 	"github.com/smartcontractkit/chainlink/core/utils"
 	"github.com/smartcontractkit/chainlink/core/web"
 
+	"github.com/DATA-DOG/go-txdb"
+	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/gin-gonic/gin"
@@ -51,16 +54,14 @@ import (
 const (
 	// RootDir the root directory for cltest
 	RootDir = "/tmp/chainlink_test"
-	// APIEmail of the API user
-	APIEmail = "email@test.net"
-	// APIKey of the API user
+	// APIKey of the fixture API user
 	APIKey = "2d25e62eaf9143e993acaf48691564b2"
-	// APISecret of the API user.
+	// APISecret of the fixture API user.
 	APISecret = "1eCP/w0llVkchejFaoBpfIGaLRxZK54lTXBCT22YLW+pdzE4Fafy/XO5LoJ2uwHi"
+	// Email of the fixture API user
+	APIEmail = "apiuser@chainlink.test"
 	// Password the password
 	Password = "password"
-	// APISessionID ID for API user
-	APISessionID = "session"
 	// SessionSecret is the hardcoded secret solely used for test
 	SessionSecret = "clsession_test_secret"
 )
@@ -74,6 +75,24 @@ func init() {
 	gomega.SetDefaultEventuallyTimeout(3 * time.Second)
 	lvl := logLevelFromEnv()
 	logger.SetLogger(CreateTestLogger(lvl))
+	// Register txdb as dialect wrapping postgres
+	// See: DialectTransactionWrappedPostgres
+	config := orm.NewConfig()
+	if config.DatabaseURL() == "" {
+		panic("You must set DATABASE_URL env var to point to your test database. HINT: Try DATABASE_URL=postgresql://postgres@localhost:5432/chainlink_test?sslmode=disable")
+	}
+	// Disable SavePoints because they cause random errors for reasons I cannot fathom
+	// Perhaps txdb's built-in transaction emulation is broken in some subtle way?
+	// NOTE: That this will cause transaction BEGIN/ROLLBACK to effectively be
+	// a no-op, this should have no negative impact on normal test operation
+	// FIXME: Can SavePoints be enabled again now that deadlocks are fixed?
+	txdb.Register("cloudsqlpostgres", "postgres", config.DatabaseURL(), txdb.SavePointOption(nil))
+
+	// Seed the random number generator, otherwise separate modules will take
+	// the same advisory locks when tested with `go test -p N` for N > 1
+	seed := time.Now().UTC().UnixNano()
+	logger.Debugf("Using seed: %v", seed)
+	rand.Seed(seed)
 }
 
 func logLevelFromEnv() zapcore.Level {
@@ -92,27 +111,46 @@ type TestConfig struct {
 }
 
 // NewConfig returns a new TestConfig
-func NewConfig(t testing.TB) (*TestConfig, func()) {
+func NewConfig(t testing.TB, options ...interface{}) (*TestConfig, func()) {
 	t.Helper()
 
 	wsserver, cleanup := newWSServer()
-	return NewConfigWithWSServer(t, wsserver), cleanup
+	return NewConfigWithWSServer(t, wsserver, options...), cleanup
+}
+
+// TODO: Consider renaming?
+func NewRandomInt64() int64 {
+	id := rand.Int63()
+	return id
 }
 
 // NewTestConfig returns a test configuration
-func NewTestConfig(t testing.TB) *TestConfig {
+func NewTestConfig(t testing.TB, options ...interface{}) *TestConfig {
 	t.Helper()
 
 	count := atomic.AddUint64(&storeCounter, 1)
 	rootdir := filepath.Join(RootDir, fmt.Sprintf("%d-%d", time.Now().UnixNano(), count))
 	rawConfig := orm.NewConfig()
+
+	rawConfig.Dialect = orm.DialectTransactionWrappedPostgres
+	for _, opt := range options {
+		switch v := opt.(type) {
+		case orm.DialectName:
+			rawConfig.Dialect = v
+		}
+	}
+
+	uniqueRandomID := NewRandomInt64()
+	// Unique advisory lock is required otherwise all tests will block each other
+	rawConfig.AdvisoryLockID = uniqueRandomID
+	// Cursor name must be different in each test to prevent deadlock
+	rawConfig.LogBroadcasterCursorName = fmt.Sprintf("logBroadcaster_%v", uniqueRandomID)
+
 	rawConfig.Set("BRIDGE_RESPONSE_URL", "http://localhost:6688")
 	rawConfig.Set("ETH_CHAIN_ID", 3)
 	rawConfig.Set("CHAINLINK_DEV", true)
 	rawConfig.Set("ETH_GAS_BUMP_THRESHOLD", 3)
-	rawConfig.Set("LOG_LEVEL", orm.LogLevel{Level: zapcore.DebugLevel})
-	rawConfig.Set("LOG_SQL", false)
-	rawConfig.Set("LOG_SQL_MIGRATIONS", false)
+	rawConfig.Set("MIGRATE_DATABASE", false)
 	rawConfig.Set("MINIMUM_SERVICE_DURATION", "24h")
 	rawConfig.Set("MIN_INCOMING_CONFIRMATIONS", 1)
 	rawConfig.Set("MIN_OUTGOING_CONFIRMATIONS", 6)
@@ -125,10 +163,10 @@ func NewTestConfig(t testing.TB) *TestConfig {
 }
 
 // NewConfigWithWSServer return new config with specified wsserver
-func NewConfigWithWSServer(t testing.TB, wsserver *httptest.Server) *TestConfig {
+func NewConfigWithWSServer(t testing.TB, wsserver *httptest.Server, options ...interface{}) *TestConfig {
 	t.Helper()
 
-	config := NewTestConfig(t)
+	config := NewTestConfig(t, options...)
 	config.SetEthereumServer(wsserver)
 	return config
 }
@@ -152,6 +190,7 @@ type TestApplication struct {
 	connectedChannel chan struct{}
 	Started          bool
 	EthMock          *EthMock
+	Account          accounts.Account
 }
 
 func newWSServer() (*httptest.Server, func()) {
@@ -215,15 +254,15 @@ func NewApplicationWithConfigAndKey(t testing.TB, tc *TestConfig, flags ...strin
 	t.Helper()
 
 	app, cleanup := NewApplicationWithConfig(t, tc, flags...)
-	app.ImportKey(key3cb8e3fd9d27e39a5e9e6852b0e96160061fd4ea)
+	app.Store.KeyStore.Unlock(Password)
+	// app.ImportKey(key3cb8e3fd9d27e39a5e9e6852b0e96160061fd4ea)
+
 	return app, cleanup
 }
 
 // NewApplicationWithConfig creates a New TestApplication with specified test config
 func NewApplicationWithConfig(t testing.TB, tc *TestConfig, flags ...string) (*TestApplication, func()) {
 	t.Helper()
-
-	cleanupDB := PrepareTestDB(tc)
 
 	ta := &TestApplication{t: t, connectedChannel: make(chan struct{}, 1)}
 	app := chainlink.NewApplication(tc.Config, func(app chainlink.Application) {
@@ -241,7 +280,6 @@ func NewApplicationWithConfig(t testing.TB, tc *TestConfig, flags ...string) (*T
 	ta.wsServer = tc.wsServer
 	return ta, func() {
 		require.NoError(t, ta.Stop())
-		cleanupDB()
 		require.True(t, ta.EthMock.AllCalled(), ta.EthMock.Remaining())
 	}
 }
@@ -307,18 +345,16 @@ func (ta *TestApplication) Stop() error {
 	return nil
 }
 
-func (ta *TestApplication) MustSeedUserSession() models.User {
-	mockUser := MustUser(APIEmail, Password)
-	require.NoError(ta.t, ta.Store.SaveUser(&mockUser))
-	session := NewSession(APISessionID)
+func (ta *TestApplication) MustSeedNewSession() string {
+	session := NewSession()
 	require.NoError(ta.t, ta.Store.SaveSession(&session))
-	return mockUser
+	return session.ID
 }
 
-// MustSeedUserAPIKey creates and returns a User with their API Token Key and
 // Secret generated.
 func (ta *TestApplication) MustSeedUserAPIKey() models.User {
-	mockUser := MustUser(APIEmail, Password)
+	panic("nope")
+	mockUser := MustUser(ta.Config.AdvisoryLockID)
 	apiToken := auth.Token{AccessKey: APIKey, Secret: APISecret}
 	require.NoError(ta.t, mockUser.SetAuthToken(&apiToken))
 	require.NoError(ta.t, ta.Store.SaveUser(&mockUser))
@@ -341,16 +377,17 @@ func (ta *TestApplication) AddUnlockedKey() {
 func (ta *TestApplication) NewHTTPClient() HTTPClientCleaner {
 	ta.t.Helper()
 
-	ta.MustSeedUserSession()
+	sessionID := ta.MustSeedNewSession()
+
 	return HTTPClientCleaner{
-		HTTPClient: NewMockAuthenticatedHTTPClient(ta.Config),
+		HTTPClient: NewMockAuthenticatedHTTPClient(ta.Config, sessionID),
 		t:          ta.t,
 	}
 }
 
 // NewClientAndRenderer creates a new cmd.Client for the test application
 func (ta *TestApplication) NewClientAndRenderer() (*cmd.Client, *RendererMock) {
-	ta.MustSeedUserSession()
+	sessionID := ta.MustSeedNewSession()
 	r := &RendererMock{}
 	client := &cmd.Client{
 		Renderer:                       r,
@@ -359,7 +396,7 @@ func (ta *TestApplication) NewClientAndRenderer() (*cmd.Client, *RendererMock) {
 		KeyStoreAuthenticator:          CallbackAuthenticator{func(*strpkg.Store, string) (string, error) { return Password, nil }},
 		FallbackAPIInitializer:         &MockAPIInitializer{},
 		Runner:                         EmptyRunner{},
-		HTTP:                           NewMockAuthenticatedHTTPClient(ta.Config),
+		HTTP:                           NewMockAuthenticatedHTTPClient(ta.Config, sessionID),
 		CookieAuthenticator:            MockCookieAuthenticator{},
 		FileSessionRequestBuilder:      &MockSessionRequestBuilder{},
 		PromptingSessionRequestBuilder: &MockSessionRequestBuilder{},
@@ -369,7 +406,6 @@ func (ta *TestApplication) NewClientAndRenderer() (*cmd.Client, *RendererMock) {
 }
 
 func (ta *TestApplication) NewAuthenticatingClient(prompter cmd.Prompter) *cmd.Client {
-	ta.MustSeedUserSession()
 	cookieAuth := cmd.NewSessionCookieAuthenticator(ta.Config.Config, &cmd.MemoryCookieStore{})
 	client := &cmd.Client{
 		Renderer:                       &RendererMock{},
@@ -406,19 +442,17 @@ func (ta *TestApplication) MustCreateJobRun(txHashBytes []byte, blockHashBytes [
 
 // NewStoreWithConfig creates a new store with given config
 func NewStoreWithConfig(config *TestConfig) (*strpkg.Store, func()) {
-	cleanupDB := PrepareTestDB(config)
 	s := strpkg.NewInsecureStore(config.Config, gracefulpanic.NewSignal())
 	return s, func() {
 		cleanUpStore(config.t, s)
-		cleanupDB()
 	}
 }
 
 // NewStore creates a new store
-func NewStore(t testing.TB) (*strpkg.Store, func()) {
+func NewStore(t testing.TB, options ...interface{}) (*strpkg.Store, func()) {
 	t.Helper()
 
-	c, cleanup := NewConfig(t)
+	c, cleanup := NewConfig(t, options...)
 	store, storeCleanup := NewStoreWithConfig(c)
 	return store, func() {
 		storeCleanup()

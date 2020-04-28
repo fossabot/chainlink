@@ -807,8 +807,8 @@ func TestORM_FindUser(t *testing.T) {
 
 	store, cleanup := cltest.NewStore(t)
 	defer cleanup()
-	user1 := cltest.MustUser("test1@email1.net", "password1")
-	user2 := cltest.MustUser("test2@email2.net", "password2")
+	user1 := cltest.MustNewUser(t, "test1@email1.net", "password1")
+	user2 := cltest.MustNewUser(t, "test2@email2.net", "password2")
 	user2.CreatedAt = time.Now().Add(-24 * time.Hour)
 
 	require.NoError(t, store.SaveUser(&user1))
@@ -841,7 +841,7 @@ func TestORM_AuthorizedUserWithSession(t *testing.T) {
 			store, cleanup := cltest.NewStore(t)
 			defer cleanup()
 
-			user := cltest.MustUser("have@email", "password")
+			user := cltest.MustNewUser(t, "have@email", "password")
 			require.NoError(t, store.SaveUser(&user))
 
 			prevSession := cltest.NewSession("correctID")
@@ -871,10 +871,11 @@ func TestORM_DeleteUser(t *testing.T) {
 
 	store, cleanup := cltest.NewStore(t)
 	defer cleanup()
-	user := cltest.MustUser("test1@email1.net", "password1")
-	require.NoError(t, store.SaveUser(&user))
 
-	_, err := store.DeleteUser()
+	_, err := store.FindUser()
+	require.NoError(t, err)
+
+	_, err = store.DeleteUser()
 	require.NoError(t, err)
 
 	_, err = store.FindUser()
@@ -886,8 +887,6 @@ func TestORM_DeleteUserSession(t *testing.T) {
 
 	store, cleanup := cltest.NewStore(t)
 	defer cleanup()
-	user := cltest.MustUser("test1@email1.net", "password1")
-	require.NoError(t, store.SaveUser(&user))
 
 	session := models.NewSession()
 	require.NoError(t, store.SaveSession(&session))
@@ -895,7 +894,7 @@ func TestORM_DeleteUserSession(t *testing.T) {
 	err := store.DeleteUserSession(session.ID)
 	require.NoError(t, err)
 
-	user, err = store.FindUser()
+	_, err = store.FindUser()
 	require.NoError(t, err)
 
 	sessions, err := store.Sessions(0, 10)
@@ -906,26 +905,26 @@ func TestORM_DeleteUserSession(t *testing.T) {
 func TestORM_CreateSession(t *testing.T) {
 	t.Parallel()
 
+	store, cleanup := cltest.NewStore(t)
+	defer cleanup()
+
+	initial := cltest.MustRandomUser()
+	require.NoError(t, store.SaveUser(&initial))
+
 	tests := []struct {
 		name        string
 		email       string
 		password    string
 		wantSession bool
 	}{
-		{"correct", cltest.APIEmail, cltest.Password, true},
-		{"incorrect email", "bogus@town.org", cltest.Password, false},
-		{"incorrect pwd", cltest.APIEmail, "jamaicandundada", false},
+		{"initial", initial.Email, cltest.Password, true},
+		{"ininitial email", "bogus@town.org", cltest.Password, false},
+		{"ininitial pwd", initial.Email, "jamaicandundada", false},
 		{"incorrect both", "dudus@coke.ja", "jamaicandundada", false},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store, cleanup := cltest.NewStore(t)
-			defer cleanup()
-
-			initial := cltest.MustUser(cltest.APIEmail, cltest.Password)
-			require.NoError(t, store.SaveUser(&initial))
-
 			sessionRequest := models.SessionRequest{
 				Email:    test.email,
 				Password: test.password,
@@ -1105,7 +1104,7 @@ func TestORM_FindTxAttempt_CurrentAttempt(t *testing.T) {
 	txAttempt, err := store.FindTxAttempt(tx.Attempts[0].Hash)
 	require.NoError(t, err)
 
-	assert.Equal(t, tx.ID, txAttempt.ID)
+	assert.Equal(t, tx.ID, txAttempt.TxID)
 	assert.Equal(t, tx.Confirmed, txAttempt.Confirmed)
 	assert.Equal(t, tx.Hash, txAttempt.Hash)
 	assert.Equal(t, tx.GasPrice, txAttempt.GasPrice)
@@ -1161,7 +1160,7 @@ func TestORM_FindTxByAttempt_CurrentAttempt(t *testing.T) {
 	assert.Equal(t, createdTx.GasPrice, fetchedTx.GasPrice)
 	assert.Equal(t, createdTx.SentAt, fetchedTx.SentAt)
 
-	assert.Equal(t, createdTx.ID, fetchedTxAttempt.ID)
+	assert.Equal(t, createdTx.ID, fetchedTxAttempt.TxID)
 	assert.Equal(t, createdTx.Confirmed, fetchedTxAttempt.Confirmed)
 	assert.Equal(t, createdTx.Hash, fetchedTxAttempt.Hash)
 	assert.Equal(t, createdTx.GasPrice, fetchedTxAttempt.GasPrice)
@@ -1244,8 +1243,13 @@ func TestORM_SyncDbKeyStoreToDisk(t *testing.T) {
 	require.NoError(t, orm.FirstOrCreateKey(seed))
 
 	keysDir := store.Config.KeysDir()
+	// Clear out the fixture
+	require.NoError(t, os.RemoveAll(keysDir))
+	require.NoError(t, store.DeleteKey("0x3cb8e3fd9d27e39a5e9e6852b0e96160061fd4ea"))
+
 	require.True(t, isDirEmpty(t, keysDir))
-	require.NoError(t, orm.ClobberDiskKeyStoreWithDBKeys(keysDir))
+	err = orm.ClobberDiskKeyStoreWithDBKeys(keysDir)
+	require.NoError(t, err)
 
 	dbkeys, err := store.Keys()
 	require.NoError(t, err)
