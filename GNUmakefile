@@ -64,7 +64,7 @@ chainlink: $(SGX_BUILD_ENCLAVE) operator-ui ## Build the chainlink binary.
 	go build $(GOFLAGS) -o $@ ./core/
 
 .PHONY: operator-ui
-operator-ui: ws-setup ## Build the static frontend UI.
+operator-ui: ## Build the static frontend UI.
 	CHAINLINK_VERSION="$(VERSION)@$(COMMIT_SHA)" yarn workspace @chainlink/operator-ui build
 	CGO_ENABLED=0 go run packr/main.go "${CURDIR}/core/services"
 
