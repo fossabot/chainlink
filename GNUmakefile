@@ -68,10 +68,6 @@ operator-ui: ws-setup ## Build the static frontend UI.
 	CHAINLINK_VERSION="$(VERSION)@$(COMMIT_SHA)" yarn workspace @chainlink/operator-ui build
 	CGO_ENABLED=0 go run packr/main.go "${CURDIR}/core/services"
 
-.PHONY: ws-setup
-ws-setup:
-	yarn setup:chainlink
-	
 .PHONY: docker
 docker: ## Build the docker image.
 	docker build \
