@@ -1,0 +1,12 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\belt",
+    "\\belt\\bin",
+    "\\belt\\src",
+    "\\belt\\src\\commands",
+    "\\belt\\test"
+  ],
+  "SelectedNode": "\\belt\\src\\commands\\box.ts",
+  "PreviewInSolutionExplorer": false
+}

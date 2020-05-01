@@ -1,3 +1,19 @@
 {
-    "typescript.tsdk": "node_modules/typescript/lib"
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "jumpToAliasFile.alias": {
+        "@": "c:\\chainlink\\src"
+    },
+    "cSpell.words": [
+        "keccak",
+        "styleguide",
+        "tslib"
+    ],
+    "files.autoGuessEncoding": true,
+    "files.trimFinalNewlines": true,
+    "git.alwaysShowStagedChangesResourceGroup": true,
+    "git.autofetch": true,
+    "git.alwaysSignOff": true,
+    "git.enableSmartCommit": true,
+    "git.postCommitCommand": "sync",
+    "git.fetchOnPull": true
 }
